@@ -5,7 +5,9 @@
 //!    (as produced by `zig build -Demit-lib-vt --prefix <dir>`).
 //! 2. `GHOSTTY_SRC_DIR`: a ghostty source checkout; we run
 //!    `zig build -Demit-lib-vt -Doptimize=ReleaseFast` into OUT_DIR.
-//! 3. pkg-config `libghostty-vt-static`, then `libghostty-vt`.
+//! 3. `deps/libghostty-vt` in the workspace, as produced by
+//!    `./build-libghostty-vt.sh`.
+//! 4. pkg-config `libghostty-vt-static`, then `libghostty-vt`.
 use std::path::{Path, PathBuf};
 
 fn link_prefix(prefix: &Path) {
@@ -50,6 +52,17 @@ fn main() {
         return;
     }
 
+    let default_prefix = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("..")
+        .join("deps")
+        .join("libghostty-vt");
+    let archive = default_prefix.join("lib").join("libghostty-vt.a");
+    println!("cargo:rerun-if-changed={}", archive.display());
+    if archive.exists() {
+        link_prefix(&default_prefix);
+        return;
+    }
+
     for name in ["libghostty-vt-static", "libghostty-vt"] {
         if pkg_config::Config::new().statik(true).probe(name).is_ok() {
             return;
@@ -57,8 +70,9 @@ fn main() {
     }
 
     panic!(
-        "Unable to locate libghostty-vt. Set LIBGHOSTTY_VT_DIR to an install \
-         prefix, GHOSTTY_SRC_DIR to a ghostty checkout (requires zig), or make \
-         it discoverable via pkg-config."
+        "Unable to locate libghostty-vt. Run ./build-libghostty-vt.sh from \
+         the repository root (requires zig 0.17), set LIBGHOSTTY_VT_DIR to an \
+         install prefix or GHOSTTY_SRC_DIR to a ghostty checkout, or make it \
+         discoverable via pkg-config. See BUILDING-GHOSTTY.md."
     );
 }

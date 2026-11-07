@@ -8,8 +8,3 @@ ar = "x86_64-w64-mingw32-gcc-ar"
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
 
-# libghostty-vt is the terminal emulation backend for local panes.
-# Point this at the install prefix of `zig build -Demit-lib-vt`.
-# Override in the environment (or set GHOSTTY_SRC_DIR instead) as needed.
-[env]
-LIBGHOSTTY_VT_DIR = { value = "../libghostty-vt-install", relative = true, force = false }

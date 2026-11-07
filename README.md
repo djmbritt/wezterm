@@ -8,6 +8,11 @@ User facing docs and guide at: https://wezterm.org/
 
 *Screenshot of wezterm on macOS, running vim*
 
+## libghostty-vt backend
+
+This branch uses [libghostty-vt](https://lib.ghostty.org/vt/) for terminal
+emulation. See [BUILDING-GHOSTTY.md](BUILDING-GHOSTTY.md) for build steps.
+
 ## Installation
 
 https://wezterm.org/installation
