@@ -1,0 +1,13 @@
+[package]
+name = "ghostty-vt-sys"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Raw FFI bindings to libghostty-vt"
+links = "ghostty-vt"
+build = "build.rs"
+
+[dependencies]
+
+[build-dependencies]
+pkg-config = "0.3"

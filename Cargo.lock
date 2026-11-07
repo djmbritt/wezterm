@@ -2122,6 +2122,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ghostty-vt-sys"
+version = "0.1.0"
+dependencies = [
+ "pkg-config",
+]
+
+[[package]]
 name = "gif"
 version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3611,6 +3618,7 @@ dependencies = [
  "thiserror 2.0.20",
  "url",
  "wezterm-dynamic",
+ "wezterm-ghostty",
  "wezterm-ssh",
  "wezterm-term",
  "windows-sys 0.61.2",
@@ -7101,6 +7109,19 @@ dependencies = [
  "wezterm-term",
  "wezterm-toast-notification",
  "winapi",
+]
+
+[[package]]
+name = "wezterm-ghostty"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "ghostty-vt-sys",
+ "log",
+ "termwiz",
+ "url",
+ "wezterm-term",
 ]
 
 [[package]]

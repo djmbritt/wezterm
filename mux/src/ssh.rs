@@ -759,7 +759,7 @@ impl Domain for RemoteSshDomain {
 
         let writer = WriterWrapper::new(writer);
 
-        let terminal = wezterm_term::Terminal::new(
+        let terminal = wezterm_ghostty::Terminal::new(
             size,
             std::sync::Arc::new(config::TermConfig::new()),
             "WezTerm",

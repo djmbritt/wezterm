@@ -211,7 +211,7 @@ impl TmuxDomainState {
             active_lock: active_lock.clone(),
         };
 
-        let terminal = wezterm_term::Terminal::new(
+        let terminal = wezterm_ghostty::Terminal::new(
             size,
             std::sync::Arc::new(config::TermConfig::new()),
             "WezTerm",

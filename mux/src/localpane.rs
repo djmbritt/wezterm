@@ -30,9 +30,10 @@ use termwiz::surface::{Line, SequenceNo};
 use url::Url;
 use wezterm_dynamic::Value;
 use wezterm_term::color::ColorPalette;
+use wezterm_ghostty::Terminal;
 use wezterm_term::{
     Alert, AlertHandler, Clipboard, DownloadHandler, KeyCode, KeyModifiers, MouseEvent, Progress,
-    SemanticZone, StableRowIndex, Terminal, TerminalConfiguration, TerminalSize,
+    SemanticZone, StableRowIndex, TerminalConfiguration, TerminalSize,
 };
 
 const PROC_INFO_CACHE_TTL: Duration = Duration::from_millis(300);
@@ -164,7 +165,16 @@ impl Pane for LocalPane {
     }
 
     fn get_cursor_position(&self) -> StableCursorPosition {
-        let mut cursor = terminal_get_cursor_position(&mut self.terminal.lock());
+        let mut cursor = {
+            let term = self.terminal.lock();
+            let pos = term.cursor_pos();
+            StableCursorPosition {
+                x: pos.x,
+                y: term.visible_row_to_stable_row(pos.y),
+                shape: pos.shape,
+                visibility: pos.visibility,
+            }
+        };
         if self.tmux_domain.lock().is_some() {
             cursor.visibility = termwiz::surface::CursorVisibility::Hidden;
         }
@@ -188,7 +198,11 @@ impl Pane for LocalPane {
         lines: Range<StableRowIndex>,
         seqno: SequenceNo,
     ) -> RangeSet<StableRowIndex> {
-        terminal_get_dirty_lines(&mut self.terminal.lock(), lines, seqno)
+        let mut set = RangeSet::new();
+        for range in self.terminal.lock().get_changed_stable_rows(lines, seqno) {
+            set.add_range(range);
+        }
+        set
     }
 
     fn for_each_logical_line_in_stable_range_mut(
@@ -196,15 +210,17 @@ impl Pane for LocalPane {
         lines: Range<StableRowIndex>,
         for_line: &mut dyn ForEachPaneLogicalLine,
     ) {
-        terminal_for_each_logical_line_in_stable_range_mut(
-            &mut self.terminal.lock(),
-            lines,
-            for_line,
-        );
+        self.terminal
+            .lock()
+            .for_each_logical_line_in_stable_range_mut(lines, |range, lines| {
+                for_line.with_logical_line_mut(range, lines)
+            });
     }
 
     fn with_lines_mut(&self, lines: Range<StableRowIndex>, with_lines: &mut dyn WithPaneLines) {
-        terminal_with_lines_mut(&mut self.terminal.lock(), lines, with_lines)
+        self.terminal
+            .lock()
+            .with_lines_mut(lines, |first, lines| with_lines.with_lines_mut(first, lines))
     }
 
     fn get_lines(&self, lines: Range<StableRowIndex>) -> (StableRowIndex, Vec<Line>) {
@@ -216,7 +232,18 @@ impl Pane for LocalPane {
     }
 
     fn get_dimensions(&self) -> RenderableDimensions {
-        terminal_get_dimensions(&mut self.terminal.lock())
+        let d = self.terminal.lock().dimensions();
+        RenderableDimensions {
+            cols: d.cols,
+            viewport_rows: d.viewport_rows,
+            scrollback_rows: d.scrollback_rows,
+            physical_top: d.physical_top,
+            scrollback_top: d.scrollback_top,
+            dpi: d.dpi,
+            pixel_width: d.pixel_width,
+            pixel_height: d.pixel_height,
+            reverse_video: d.reverse_video,
+        }
     }
 
     fn copy_user_vars(&self) -> HashMap<String, String> {
@@ -389,6 +416,14 @@ impl Pane for LocalPane {
 
     fn perform_actions(&self, actions: Vec<termwiz::escape::Action>) {
         self.terminal.lock().perform_actions(actions)
+    }
+
+    fn wants_raw_output(&self) -> bool {
+        true
+    }
+
+    fn advance_bytes(&self, bytes: &[u8]) {
+        self.terminal.lock().advance_bytes(bytes)
     }
 
     fn mouse_event(&self, event: MouseEvent) -> Result<(), Error> {
@@ -649,8 +684,7 @@ impl Pane for LocalPane {
         range: Range<StableRowIndex>,
         limit: Option<u32>,
     ) -> anyhow::Result<Vec<SearchResult>> {
-        let term = self.terminal.lock();
-        let screen = term.screen();
+        let mut term = self.terminal.lock();
 
         enum CompiledPattern {
             CaseSensitiveString(String),
@@ -678,7 +712,7 @@ impl Pane for LocalPane {
         let mut results = vec![];
         let mut uniq_matches: HashMap<String, usize> = HashMap::new();
 
-        screen.for_each_logical_line_in_stable_range(range, |sr, lines| {
+        term.for_each_logical_line_in_stable_range(range, |sr, lines| {
             if let Some(limit) = limit {
                 if results.len() == limit as usize {
                     // We've reach the limit, stop iteration.

@@ -5,6 +5,8 @@ members = [
   "strip-ansi-escapes",
   "sync-color-schemes",
   "deps/cairo",
+  "ghostty-vt-sys",
+  "wezterm-ghostty",
   "wezterm",
   "wezterm-blob-leases",
   "wezterm-cell",
@@ -258,6 +260,8 @@ wezterm-open-url = { path = "wezterm-open-url" }
 wezterm-ssh = { path = "wezterm-ssh" }
 wezterm-surface = { path = "wezterm-surface" }
 wezterm-term = { path = "term" }
+ghostty-vt-sys = { path = "ghostty-vt-sys" }
+wezterm-ghostty = { path = "wezterm-ghostty" }
 wezterm-toast-notification = { path = "wezterm-toast-notification" }
 wezterm-uds = { path = "wezterm-uds" }
 wezterm-version = { path = "wezterm-version" }

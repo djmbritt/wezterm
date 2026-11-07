@@ -140,6 +140,13 @@ fn send_actions_to_mux(pane: &Weak<dyn Pane>, dead: &Arc<AtomicBool>, actions: V
 /// This is the parsing loop for the given pane.
 /// It reads all data sent to `rx` (from pane PTY) and handles all terminal events for this pane.
 fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: FileDescriptor) {
+    if pane
+        .upgrade()
+        .map(|p| p.wants_raw_output())
+        .unwrap_or(false)
+    {
+        return relay_raw_output(pane, dead, rx);
+    }
     let mut buf = vec![0; configuration().mux_output_parser_buffer_size];
     let mut parser = termwiz::escape::parser::Parser::new();
     let mut actions = vec![];
@@ -244,6 +251,162 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
     if !actions.is_empty() {
         send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
     }
+}
+
+/// Sends raw pty output to a pane that does its own parsing
+fn send_bytes_to_mux(pane: &Weak<dyn Pane>, dead: &Arc<AtomicBool>, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let start = Instant::now();
+    match pane.upgrade() {
+        Some(pane) => {
+            pane.advance_bytes(bytes);
+            histogram!("send_actions_to_mux.perform_actions.latency").record(start.elapsed());
+            Mux::notify_from_any_thread(MuxNotification::PaneOutput(pane.pane_id()));
+        }
+        None => {
+            dead.store(true, Ordering::Relaxed);
+        }
+    }
+    histogram!("send_actions_to_mux.rate").record(1.);
+}
+
+const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
+const SYNC_END: &[u8] = b"\x1b[?2026l";
+/// How long we'll hold output for a synchronized update before giving up
+/// on the application ever ending it
+const SYNC_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// The raw-bytes counterpart of `parse_buffered_data`, used for panes
+/// whose terminal model (libghostty-vt) parses the stream itself.
+///
+/// It keeps the same output coalescing behavior, and honors synchronized
+/// output (DECSET 2026) by holding back bytes between the begin and end
+/// markers so that the terminal model only ever observes complete frames.
+fn relay_raw_output(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: FileDescriptor) {
+    let mut buf = vec![0; configuration().mux_output_parser_buffer_size];
+    let mut pending: Vec<u8> = vec![];
+    // Offset into `pending` from which we still need to look for markers
+    let mut scan_from = 0;
+    let mut hold_since: Option<Instant> = None;
+    let mut delay = Duration::from_millis(configuration().mux_output_parser_coalesce_delay_ms);
+    let mut deadline = None;
+
+    fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    loop {
+        if let Some(since) = hold_since {
+            // Wait for more data, but not beyond the sync timeout
+            let remain = SYNC_TIMEOUT.checked_sub(since.elapsed());
+            let mut pfd = [pollfd {
+                fd: rx.as_socket_descriptor(),
+                events: POLLIN,
+                revents: 0,
+            }];
+            let readable = match remain {
+                Some(remain) => matches!(poll(&mut pfd, Some(remain)), Ok(1)),
+                None => false,
+            };
+            if !readable {
+                log::debug!("synchronized output timed out; flushing");
+                hold_since = None;
+                send_bytes_to_mux(&pane, dead, &pending);
+                pending.clear();
+                scan_from = 0;
+                continue;
+            }
+        }
+
+        let size = match rx.read(&mut buf) {
+            Ok(0) | Err(_) => {
+                dead.store(true, Ordering::Relaxed);
+                break;
+            }
+            Ok(size) => size,
+        };
+        pending.extend_from_slice(&buf[0..size]);
+
+        // Process any synchronized output markers in arrival order
+        loop {
+            let region = &pending[scan_from..];
+            let begin = find(region, SYNC_BEGIN);
+            let end = find(region, SYNC_END);
+            let next = match (begin, end) {
+                (Some(b), Some(e)) => Some((b.min(e), b < e)),
+                (Some(b), None) => Some((b, true)),
+                (None, Some(e)) => Some((e, false)),
+                (None, None) => None,
+            };
+            match next {
+                Some((pos, true)) => {
+                    // Flush everything before the frame starts
+                    let at = scan_from + pos;
+                    if hold_since.is_none() {
+                        send_bytes_to_mux(&pane, dead, &pending[..at]);
+                        pending.drain(..at);
+                        scan_from = SYNC_BEGIN.len();
+                        hold_since = Some(Instant::now());
+                    } else {
+                        scan_from = at + SYNC_BEGIN.len();
+                    }
+                }
+                Some((pos, false)) => {
+                    // The frame is complete; flush it
+                    let at = scan_from + pos + SYNC_END.len();
+                    send_bytes_to_mux(&pane, dead, &pending[..at]);
+                    pending.drain(..at);
+                    scan_from = 0;
+                    hold_since = None;
+                }
+                None => {
+                    // A marker may straddle reads; rescan the tail next time
+                    scan_from = pending.len().saturating_sub(SYNC_BEGIN.len() - 1);
+                    break;
+                }
+            }
+        }
+
+        if hold_since.is_none() && !pending.is_empty() {
+            // If we haven't accumulated too much data,
+            // pause for a short while to increase the chances
+            // that we coalesce a full "frame" from an unoptimized
+            // TUI program
+            if pending.len() < buf.len() {
+                let poll_delay = match deadline {
+                    None => {
+                        deadline.replace(Instant::now() + delay);
+                        Some(delay)
+                    }
+                    Some(target) => target.checked_duration_since(Instant::now()),
+                };
+                if poll_delay.is_some() {
+                    let mut pfd = [pollfd {
+                        fd: rx.as_socket_descriptor(),
+                        events: POLLIN,
+                        revents: 0,
+                    }];
+                    if let Ok(1) = poll(&mut pfd, poll_delay) {
+                        continue;
+                    }
+                }
+            }
+            send_bytes_to_mux(&pane, dead, &pending);
+            pending.clear();
+            scan_from = 0;
+            deadline = None;
+        }
+
+        let config = configuration();
+        buf.resize(config.mux_output_parser_buffer_size, 0);
+        delay = Duration::from_millis(config.mux_output_parser_coalesce_delay_ms);
+    }
+
+    // Deliver whatever remains, so that short lived commands still
+    // show their output
+    send_bytes_to_mux(&pane, dead, &pending);
 }
 
 fn set_socket_buffer(fd: &mut FileDescriptor, option: i32, size: usize) -> anyhow::Result<()> {

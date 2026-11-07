@@ -1,0 +1,16 @@
+[package]
+name = "wezterm-ghostty"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A wezterm terminal model backed by libghostty-vt"
+
+[dependencies]
+anyhow.workspace = true
+base64 = { workspace = true, features = ["std"] }
+ghostty-vt-sys.workspace = true
+log.workspace = true
+termwiz.workspace = true
+url.workspace = true
+wezterm-term = { workspace = true, features = ["use_serde"] }
+

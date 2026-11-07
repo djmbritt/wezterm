@@ -48,6 +48,7 @@ url.workspace = true
 wezterm-dynamic.workspace = true
 wezterm-ssh.workspace = true
 wezterm-term = { workspace=true, features=["use_serde"] }
+wezterm-ghostty.workspace = true
 
 [target."cfg(windows)".dependencies]
 ntapi.workspace = true

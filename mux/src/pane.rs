@@ -258,6 +258,16 @@ pub trait Pane: Downcast + Send + Sync {
     }
     fn mouse_event(&self, event: MouseEvent) -> anyhow::Result<()>;
     fn perform_actions(&self, _actions: Vec<termwiz::escape::Action>) {}
+    /// Returns true if this pane consumes raw pty output via
+    /// `advance_bytes` rather than pre-parsed actions via
+    /// `perform_actions`.  Panes backed by libghostty-vt do their own
+    /// escape sequence parsing.
+    fn wants_raw_output(&self) -> bool {
+        false
+    }
+    /// Feed raw pty output to the pane.  Only called when
+    /// `wants_raw_output` returns true.
+    fn advance_bytes(&self, _bytes: &[u8]) {}
     fn is_dead(&self) -> bool;
     fn kill(&self) {}
     fn palette(&self) -> ColorPalette;
