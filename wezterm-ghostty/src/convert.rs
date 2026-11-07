@@ -108,6 +108,7 @@ pub unsafe fn read_row(
     cols: u16,
     seqno: SequenceNo,
     links: &mut HyperlinkCache,
+    decorate: &mut dyn FnMut(&mut [Cell]),
 ) -> Line {
     let mut row: GhosttyRow = 0;
     ghostty_grid_ref_row(&start, &mut row);
@@ -214,6 +215,11 @@ pub unsafe fn read_row(
             let cp: u32 = cell_get(cell, GHOSTTY_CELL_DATA_CODEPOINT);
             text.push(char::from_u32(cp).unwrap_or(' '));
         }
+        if text.starts_with(char::from_u32(crate::images::PLACEHOLDER).unwrap()) {
+            // kitty Unicode placeholder: the image is drawn in its place
+            cells.push(Cell::blank_with_attrs(attrs));
+            continue;
+        }
 
         if width == 2 {
             last_wide_attrs = attrs.clone();
@@ -227,6 +233,7 @@ pub unsafe fn read_row(
         cells.push(Cell::blank());
     }
 
+    decorate(&mut cells);
     let mut line = Line::from_cells(cells, seqno);
     if wrapped {
         line.set_last_cell_was_wrapped(true, seqno);

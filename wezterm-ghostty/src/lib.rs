@@ -28,6 +28,7 @@ use wezterm_term::{
 };
 
 mod convert;
+mod images;
 pub mod keys;
 mod sniff;
 
@@ -200,6 +201,7 @@ pub struct Terminal {
     lost_focus_alerted_seqno: SequenceNo,
     current_mouse_buttons: Vec<MouseButton>,
     sniffer: sniff::OscSniffer,
+    images: images::Images,
 }
 
 // All of the raw libghostty handles are owned exclusively by this struct
@@ -464,6 +466,7 @@ impl Terminal {
             lost_focus_alerted_seqno: 0,
             current_mouse_buttons: vec![],
             sniffer: sniff::OscSniffer::default(),
+            images: images::Images::new(),
         };
         term.install_callbacks();
         term.apply_config();
@@ -580,6 +583,7 @@ impl Terminal {
                 &title_report as *const _ as _,
             );
         }
+        images::Images::configure(self.raw, self.config.enable_kitty_graphics());
         self.cb().enq_answerback = self.config.enq_answerback();
         // Re-evaluate any palette overrides relative to the new defaults
         self.colors_snapshot.clear();
@@ -656,6 +660,7 @@ impl Terminal {
             // active when it was created; we just need a fresh one here.
             self.screens[active].free_anchor();
             self.screens[active].mark_all(seqno);
+            self.images.reset();
         }
 
         let rows = self.rows();
@@ -745,6 +750,11 @@ impl Terminal {
         }
         let top = screen.stable_offset;
         screen.prune_below(top);
+        for row in self.images.update(self.raw, self.render, top, new_active_top) {
+            if row >= top {
+                screen.mark_row(row, seqno);
+            }
+        }
 
         self.reanchor();
         self.update_cursor_shape();
@@ -1071,6 +1081,7 @@ impl Terminal {
         for screen in self.screens.iter_mut() {
             screen.free_anchor();
         }
+        self.images.reset();
         self.resize_ghostty();
         self.seqno += 1;
         let seqno = self.seqno;
@@ -1151,7 +1162,18 @@ impl Terminal {
             if ghostty_terminal_grid_ref(self.raw, point, &mut gref) != GHOSTTY_SUCCESS {
                 return None;
             }
-            Some(convert::read_row(gref, cols, seqno, &mut self.links))
+            let term = self.raw;
+            let size = self.size;
+            let cell_w = (size.pixel_width / size.cols.max(1)) as u32;
+            let cell_h = (size.pixel_height / size.rows.max(1)) as u32;
+            let images = &mut self.images;
+            Some(convert::read_row(
+                gref,
+                cols,
+                seqno,
+                &mut self.links,
+                &mut |cells| images.apply_to_row(term, row, cells, cell_w, cell_h),
+            ))
         }
     }
 

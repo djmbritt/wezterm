@@ -111,9 +111,16 @@ cargo test -p ghostty-vt-sys -p wezterm-ghostty
 
 - **tmux control mode (`tmux -CC`) doesn't work.** libghostty-vt doesn't
   expose the DCS passthrough that wezterm's tmux integration needs.
-- **Inline images aren't shown.** This covers sixel, iTerm2 images and the
-  kitty graphics protocol. libghostty-vt supports kitty graphics, but it
-  isn't wired into wezterm's renderer yet.
+- **Only the kitty graphics protocol is supported for images.** Sixel and
+  iTerm2 inline images aren't, because libghostty-vt doesn't implement them.
+  As in upstream wezterm, kitty graphics are off until you set
+  `config.enable_kitty_graphics = true`.
+- **Kitty animations show a single frame.** wezterm doesn't drive
+  libghostty-vt's animation clock yet.
+- **Images shown with Unicode placeholders** (virtual placements, as used
+  by tmux-friendly image tools) only appear while their cells are on screen.
+  Once they scroll into the scrollback, the cells show blank. Images placed
+  directly (`a=T`/`a=p`) stay visible in the scrollback.
 - **Key mapping assumes a US layout** when it picks physical keys for
   characters. This only affects kitty-protocol "alternate key" reporting.
 - **A steady block cursor set by an application** shows as your configured

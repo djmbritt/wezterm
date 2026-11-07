@@ -9,6 +9,7 @@ description = "A wezterm terminal model backed by libghostty-vt"
 anyhow.workspace = true
 base64 = { workspace = true, features = ["std"] }
 ghostty-vt-sys.workspace = true
+image.workspace = true
 log.workspace = true
 termwiz.workspace = true
 url.workspace = true

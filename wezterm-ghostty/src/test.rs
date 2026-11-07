@@ -7,11 +7,15 @@ use wezterm_term::{Intensity, SemanticType};
 #[derive(Debug)]
 struct TestConfig {
     scrollback: usize,
+    kitty_graphics: bool,
 }
 
 impl TerminalConfiguration for TestConfig {
     fn scrollback_size(&self) -> usize {
         self.scrollback
+    }
+    fn enable_kitty_graphics(&self) -> bool {
+        self.kitty_graphics
     }
     fn color_palette(&self) -> ColorPalette {
         ColorPalette::default()
@@ -44,6 +48,15 @@ impl AlertHandler for Alerts {
 }
 
 fn term_with(rows: usize, cols: usize, scrollback: usize) -> (Terminal, Sink) {
+    term_with_graphics(rows, cols, scrollback, false)
+}
+
+fn term_with_graphics(
+    rows: usize,
+    cols: usize,
+    scrollback: usize,
+    kitty_graphics: bool,
+) -> (Terminal, Sink) {
     let sink = Sink::default();
     let term = Terminal::new(
         TerminalSize {
@@ -53,7 +66,10 @@ fn term_with(rows: usize, cols: usize, scrollback: usize) -> (Terminal, Sink) {
             pixel_height: rows * 20,
             dpi: 96,
         },
-        Arc::new(TestConfig { scrollback }),
+        Arc::new(TestConfig {
+            scrollback,
+            kitty_graphics,
+        }),
         "WezTerm",
         "test",
         Box::new(sink.clone()),
@@ -348,4 +364,162 @@ fn resize_keeps_content_reachable() {
         .filter(|l| !l.is_empty())
         .collect();
     assert_eq!(text, vec!["first", "second", "third", "fourth"]);
+}
+
+mod kitty {
+    use super::*;
+    use base64::Engine;
+
+    fn b64(data: &[u8]) -> String {
+        base64::engine::general_purpose::STANDARD.encode(data)
+    }
+
+    /// Returns (row, col, top_left, bottom_right, paddings) for each image
+    /// slice on the given stable rows
+    fn slices(
+        term: &mut Terminal,
+        rows: Range<StableRowIndex>,
+    ) -> Vec<(StableRowIndex, usize, (f32, f32), (f32, f32), [u16; 4], Option<u32>)> {
+        let (first, lines) = term.get_lines(rows);
+        let mut out = vec![];
+        for (i, line) in lines.iter().enumerate() {
+            for (x, cell) in line.visible_cells().enumerate() {
+                if let Some(images) = cell.attrs().images() {
+                    for img in images {
+                        let tl = img.top_left();
+                        let br = img.bottom_right();
+                        let p = img.padding();
+                        out.push((
+                            first + i as StableRowIndex,
+                            x,
+                            (*tl.x, *tl.y),
+                            (*br.x, *br.y),
+                            [p.0, p.1, p.2, p.3],
+                            img.image_id(),
+                        ));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    // 20x40 cells; a 20x20 RGBA image covers 2 columns, half a row
+    fn rgba_square(w: u32, h: u32) -> Vec<u8> {
+        let mut v = vec![];
+        for i in 0..w * h {
+            v.extend_from_slice(&[(i % 256) as u8, 0, 0, 255]);
+        }
+        v
+    }
+
+    #[test]
+    fn rgba_placement() {
+        let (mut term, sink) = term_with_graphics(5, 10, 100, true);
+        let px = rgba_square(20, 20);
+        term.advance_bytes(format!("\x1b_Ga=T,f=32,i=7,s=20,v=20;{}\x1b\\", b64(&px)));
+        // The terminal acknowledges the image
+        let reply = String::from_utf8(sink.take()).unwrap();
+        assert!(reply.contains("i=7;OK"), "{reply:?}");
+
+        let s = slices(&mut term, 0..5);
+        assert_eq!(s.len(), 2, "{s:?}");
+        // Left cell: x 0..10 of 20 px, y 0..20 of 20 (image is 20px tall,
+        // cell is 20px tall)
+        assert_eq!(s[0].0, 0);
+        assert_eq!(s[0].1, 0);
+        assert_eq!(s[0].2, (0.0, 0.0));
+        assert_eq!(s[0].3, (0.5, 1.0));
+        assert_eq!(s[0].4, [0, 0, 0, 0]);
+        assert_eq!(s[1].1, 1);
+        assert_eq!(s[1].2, (0.5, 0.0));
+        assert_eq!(s[1].3, (1.0, 1.0));
+        assert_eq!(s[0].5, Some(7));
+    }
+
+    #[test]
+    fn partial_cells_get_padding() {
+        let (mut term, _) = term_with_graphics(5, 10, 100, true);
+        let px = rgba_square(15, 30);
+        term.advance_bytes(format!("\x1b_Ga=T,f=32,i=1,s=15,v=30,q=2;{}\x1b\\", b64(&px)));
+        let s = slices(&mut term, 0..5);
+        // 2 cols x 2 rows
+        assert_eq!(s.len(), 4, "{s:?}");
+        // bottom-right cell: 5 px wide (padding right 5), 10 px tall
+        // (padding bottom 10)
+        let br = s.iter().find(|x| x.0 == 1 && x.1 == 1).unwrap();
+        assert_eq!(br.4, [0, 0, 5, 10]);
+        assert_eq!(br.3, (1.0, 1.0));
+    }
+
+    #[test]
+    fn png_is_decoded() {
+        let (mut term, _) = term_with_graphics(5, 10, 100, true);
+        let mut png = vec![];
+        let img = image::RgbaImage::from_pixel(10, 20, image::Rgba([0, 255, 0, 255]));
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        term.advance_bytes(format!("\x1b_Ga=T,f=100,i=3,q=2;{}\x1b\\", b64(&png)));
+        let s = slices(&mut term, 0..5);
+        assert_eq!(s.len(), 1, "{s:?}");
+        assert_eq!(s[0].2, (0.0, 0.0));
+        assert_eq!(s[0].3, (1.0, 1.0));
+    }
+
+    #[test]
+    fn image_scrolls_into_scrollback() {
+        let (mut term, _) = term_with_graphics(3, 10, 100, true);
+        term.advance_bytes("top\r\n");
+        let px = rgba_square(10, 20);
+        term.advance_bytes(format!("\x1b_Ga=T,f=32,i=2,s=10,v=20,q=2;{}\x1b\\", b64(&px)));
+        for i in 0..10 {
+            term.advance_bytes(format!("\r\nline{i}"));
+        }
+        let dims = term.dimensions();
+        assert!(dims.physical_top > 1);
+        // Still attached to stable row 1, now in the scrollback
+        let s = slices(&mut term, 0..dims.physical_top + 3);
+        assert_eq!(s.len(), 1, "{s:?}");
+        assert_eq!(s[0].0, 1);
+    }
+
+    #[test]
+    fn delete_removes_image_and_dirties_row() {
+        let (mut term, _) = term_with_graphics(3, 10, 100, true);
+        let px = rgba_square(10, 20);
+        term.advance_bytes(format!("\x1b_Ga=T,f=32,i=2,s=10,v=20,q=2;{}\x1b\\", b64(&px)));
+        assert_eq!(slices(&mut term, 0..3).len(), 1);
+        let seq = term.current_seqno();
+        term.advance_bytes("\x1b_Ga=d,d=I,i=2,q=2\x1b\\");
+        let changed = term.get_changed_stable_rows(0..3, seq);
+        assert!(changed.iter().any(|r| r.contains(&0)), "{changed:?}");
+        assert!(slices(&mut term, 0..3).is_empty());
+    }
+
+    #[test]
+    fn unicode_placeholders() {
+        let (mut term, _) = term_with_graphics(3, 10, 100, true);
+        let px = rgba_square(20, 20);
+        // Transmit, then create a virtual placement 2 cols x 1 row
+        term.advance_bytes(format!("\x1b_Gf=32,i=9,s=20,v=20,q=2;{}\x1b\\", b64(&px)));
+        term.advance_bytes("\x1b_Ga=p,U=1,i=9,c=2,r=1,q=2\x1b\\");
+        // Placeholder cells; the foreground color carries the image id.
+        // U+0305 is the diacritic for row/column 0.
+        term.advance_bytes("\x1b[38;5;9m\u{10EEEE}\u{305}\u{305}\u{10EEEE}\u{305}\u{30D}\x1b[39m");
+        let s = slices(&mut term, 0..3);
+        assert_eq!(s.len(), 2, "{s:?}");
+        assert_eq!(s[0].5, Some(9));
+        let (_, lines) = term.get_lines(0..1);
+        // The placeholder characters themselves are not drawn
+        assert_eq!(lines[0].as_str().trim_end(), "");
+    }
+
+    #[test]
+    fn disabled_by_config() {
+        let (mut term, _) = term_with_graphics(3, 10, 100, false);
+        let px = rgba_square(10, 20);
+        term.advance_bytes(format!("\x1b_Ga=T,f=32,i=2,s=10,v=20,q=2;{}\x1b\\", b64(&px)));
+        assert!(slices(&mut term, 0..3).is_empty());
+    }
 }

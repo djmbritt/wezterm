@@ -7118,6 +7118,7 @@ dependencies = [
  "anyhow",
  "base64",
  "ghostty-vt-sys",
+ "image",
  "log",
  "termwiz",
  "url",
