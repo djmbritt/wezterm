@@ -485,13 +485,26 @@ impl Pane for RexPane {
             return Ok(());
         }
         let cell = |px: usize, n: usize| (px / n.max(1)).min(u16::MAX as usize) as u16;
+        let mut cell_width = cell(size.pixel_width, size.cols);
+        let mut cell_height = cell(size.pixel_height, size.rows);
+        if cell_width == 0 || cell_height == 0 {
+            // wezterm can ask for a size before its window knows its pixel
+            // geometry; the server rejects zero cell metrics, so reuse the
+            // cell size the terminal has now, or wait for a later resize.
+            let current = self.terminal.lock().get_size();
+            cell_width = cell(current.pixel_width, current.cols);
+            cell_height = cell(current.pixel_height, current.rows);
+            if cell_width == 0 || cell_height == 0 {
+                return Ok(());
+            }
+        }
         let _ = self.host.send(HostCommand::Resize {
             session_id: self.session_id.clone(),
             block_id: self.block_id.clone(),
             cols: size.cols.min(u16::MAX as usize) as u16,
             rows: size.rows.min(u16::MAX as usize) as u16,
-            cell_width: cell(size.pixel_width, size.cols),
-            cell_height: cell(size.pixel_height, size.rows),
+            cell_width,
+            cell_height,
         });
         Ok(())
     }
