@@ -351,6 +351,14 @@ async fn connect_to_auto_connect_domains() -> anyhow::Result<()> {
             if dom.connect_automatically() {
                 dom.attach(None).await?;
             }
+        } else if let Some(dom) = dom.downcast_ref::<mux::rex::RexDomain>() {
+            if dom.connect_automatically() {
+                // A Rex server that isn't running shouldn't stop wezterm
+                // from starting.
+                if let Err(err) = dom.attach(None).await {
+                    log::error!("{err:#}");
+                }
+            }
         }
     }
     Ok(())

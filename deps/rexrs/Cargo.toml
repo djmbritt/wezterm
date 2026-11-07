@@ -1,0 +1,31 @@
+[package]
+name = "rexrs"
+version = "0.1.0"
+edition = "2024"
+description = "A typed client for the Rex server's control API"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = ["tungstenite"]
+# A blocking transport built on `tungstenite`, used by `RexClient::builder().connect()`.
+tungstenite = ["dep:tungstenite"]
+# An async transport built on `tokio-tungstenite`, used by `AsyncRexClient::builder().connect()`.
+tokio = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures-util"]
+
+[dependencies]
+percent-encoding = "2.3.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+
+futures-util = { version = "0.3.34", default-features = false, features = ["sink"], optional = true }
+tokio = { version = "1.54.1", features = ["net"], optional = true }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"], optional = true }
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "time"] }
+
+[[test]]
+name = "live_async"
+required-features = ["tokio"]

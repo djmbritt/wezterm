@@ -1,5 +1,6 @@
 use config::{ConfigHandle, SshMultiplexing};
 use mux::domain::{Domain, LocalDomain};
+use mux::rex::RexDomain;
 use mux::ssh::RemoteSshDomain;
 use mux::Mux;
 use std::sync::Arc;
@@ -86,6 +87,19 @@ fn update_mux_domains_impl(config: &ConfigHandle, is_standalone_mux: bool) -> an
 
         let domain: Arc<dyn Domain> = Arc::new(LocalDomain::new_serial_domain(serial.clone())?);
         mux.add_domain(&domain);
+    }
+
+    // Rex domains attach a GUI to a Rex server; a mux server has no use
+    // for them.
+    if !is_standalone_mux {
+        for rex_dom in &config.rex_domains {
+            if mux.get_domain_by_name(&rex_dom.name).is_some() {
+                continue;
+            }
+
+            let domain: Arc<dyn Domain> = Arc::new(RexDomain::new(rex_dom));
+            mux.add_domain(&domain);
+        }
     }
 
     if is_standalone_mux {

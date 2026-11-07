@@ -19,6 +19,7 @@ crossbeam.workspace = true
 downcast-rs.workspace = true
 fancy-regex.workspace = true
 filedescriptor.workspace = true
+flume.workspace = true
 finl_unicode.workspace = true
 hostname.workspace = true
 lazy_static.workspace = true
@@ -36,6 +37,7 @@ procinfo.workspace = true
 promise.workspace = true
 rangeset.workspace = true
 serde = {workspace=true, features = ["rc", "derive"]}
+serde_json.workspace = true
 serial2.workspace = true
 shell-words.workspace = true
 smol.workspace = true
@@ -49,6 +51,7 @@ wezterm-dynamic.workspace = true
 wezterm-ssh.workspace = true
 wezterm-term = { workspace=true, features=["use_serde"] }
 wezterm-ghostty.workspace = true
+wezterm-rex.workspace = true
 
 [target."cfg(windows)".dependencies]
 ntapi.workspace = true

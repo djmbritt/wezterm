@@ -22,7 +22,7 @@ pub const PLACEHOLDER: u32 = 0x10EEEE;
 
 /// Storage limit in bytes when kitty graphics are enabled.  This matches
 /// kitty's own default quota.
-const STORAGE_LIMIT: u64 = 320 * 1024 * 1024;
+pub(crate) const STORAGE_LIMIT: u64 = 320 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placement {
@@ -89,9 +89,12 @@ impl Images {
     }
 
     /// Enable or disable the protocol on a terminal
-    pub fn configure(term: GhosttyTerminal, enabled: bool) {
+    /// `local_media` allows the file, temporary file and shared memory
+    /// transmission media. Leave it off for output that comes from another
+    /// machine (a Rex server): those media read files on *this* machine.
+    pub fn configure(term: GhosttyTerminal, enabled: bool, local_media: bool) {
         let limit: u64 = if enabled { STORAGE_LIMIT } else { 0 };
-        let on = enabled;
+        let on = enabled && local_media;
         let tmp = std::env::temp_dir();
         let tmp = tmp.to_string_lossy();
         let tmp = GhosttyString {
@@ -119,7 +122,7 @@ impl Images {
             ghostty_terminal_set(
                 term,
                 GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_MEDIUM_TEMP_FILE,
-                if enabled {
+                if on {
                     &tmp as *const GhosttyString as *const _
                 } else {
                     std::ptr::null()
@@ -231,8 +234,7 @@ impl Images {
             }
 
             let mut sel: GhosttySelection = std::mem::zeroed();
-            if ghostty_kitty_graphics_placement_rect(iter, image, term, &mut sel)
-                != GHOSTTY_SUCCESS
+            if ghostty_kitty_graphics_placement_rect(iter, image, term, &mut sel) != GHOSTTY_SUCCESS
             {
                 continue;
             }
@@ -338,7 +340,11 @@ impl Images {
 
     /// Returns the decoded pixels of an image, converting them to RGBA
     /// and caching them until the image's generation changes.
-    fn image(&mut self, term: GhosttyTerminal, image_id: u32) -> Option<(u32, u32, Arc<ImageData>)> {
+    fn image(
+        &mut self,
+        term: GhosttyTerminal,
+        image_id: u32,
+    ) -> Option<(u32, u32, Arc<ImageData>)> {
         let graphics = storage(term);
         if graphics.is_null() {
             return None;
@@ -436,7 +442,10 @@ impl Images {
             let Some((img_w, img_h, data)) = self.image(term, p.image_id) else {
                 continue;
             };
-            if p.pixel_width == 0 || p.pixel_height == 0 || p.source_width == 0 || p.source_height == 0
+            if p.pixel_width == 0
+                || p.pixel_height == 0
+                || p.source_width == 0
+                || p.source_height == 0
             {
                 continue;
             }
@@ -449,7 +458,8 @@ impl Images {
                 continue;
             }
             let v = |py: u32| {
-                (p.source_y as f32 + (py - iy0) as f32 * p.source_height as f32 / p.pixel_height as f32)
+                (p.source_y as f32
+                    + (py - iy0) as f32 * p.source_height as f32 / p.pixel_height as f32)
                     / img_h as f32
             };
 
@@ -481,7 +491,9 @@ impl Images {
                     Some(p.image_id),
                     Some(p.placement_id),
                 );
-                cells[col as usize].attrs_mut().attach_image(Box::new(image));
+                cells[col as usize]
+                    .attrs_mut()
+                    .attach_image(Box::new(image));
             }
         }
     }

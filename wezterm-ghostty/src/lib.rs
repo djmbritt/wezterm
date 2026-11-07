@@ -23,8 +23,7 @@ use wezterm_term::color::ColorPalette;
 use wezterm_term::{
     Alert, AlertHandler, Clipboard, ClipboardSelection, CursorPosition, DeviceControlHandler,
     DownloadHandler, KeyCode, KeyModifiers, Line, MouseButton, MouseEvent, MouseEventKind,
-    Progress, SemanticZone, StableRowIndex, TerminalConfiguration, TerminalSize,
-    VisibleRowIndex,
+    Progress, SemanticZone, StableRowIndex, TerminalConfiguration, TerminalSize, VisibleRowIndex,
 };
 
 mod convert;
@@ -105,7 +104,9 @@ impl ScreenState {
 
     fn seqno_of(&self, row: StableRowIndex) -> SequenceNo {
         let mut seqno = self.bulk_seqno;
-        let idx = self.suffix_marks.partition_point(|(start, _)| *start <= row);
+        let idx = self
+            .suffix_marks
+            .partition_point(|(start, _)| *start <= row);
         if idx > 0 {
             seqno = seqno.max(self.suffix_marks[idx - 1].1);
         }
@@ -144,7 +145,9 @@ impl ScreenState {
     fn prune_below(&mut self, top: StableRowIndex) {
         self.lines = self.lines.split_off(&top);
         self.row_seqno = self.row_seqno.split_off(&top);
-        let idx = self.suffix_marks.partition_point(|(start, _)| *start <= top);
+        let idx = self
+            .suffix_marks
+            .partition_point(|(start, _)| *start <= top);
         if idx > 1 {
             // Marks wholly below `top` are subsumed by the last one at or
             // below it, which still applies to every remaining row.
@@ -202,6 +205,9 @@ pub struct Terminal {
     current_mouse_buttons: Vec<MouseButton>,
     sniffer: sniff::OscSniffer,
     images: images::Images,
+    /// Colours belong to whoever produces the output (a Rex server), not to
+    /// wezterm's config. See `set_server_owned`.
+    server_owned: bool,
 }
 
 // All of the raw libghostty handles are owned exclusively by this struct
@@ -268,10 +274,7 @@ unsafe extern "C" fn cb_enquiry(_t: GhosttyTerminal, ud: *mut std::ffi::c_void) 
     gstr(&cbs(ud).enq_answerback)
 }
 
-unsafe extern "C" fn cb_xtversion(
-    _t: GhosttyTerminal,
-    ud: *mut std::ffi::c_void,
-) -> GhosttyString {
+unsafe extern "C" fn cb_xtversion(_t: GhosttyTerminal, ud: *mut std::ffi::c_void) -> GhosttyString {
     gstr(&cbs(ud).xtversion)
 }
 
@@ -414,13 +417,19 @@ impl Terminal {
                 ghostty_render_state_row_iterator_new(null, &mut row_iter),
                 GHOSTTY_SUCCESS
             );
-            assert_eq!(ghostty_key_encoder_new(null, &mut key_encoder), GHOSTTY_SUCCESS);
+            assert_eq!(
+                ghostty_key_encoder_new(null, &mut key_encoder),
+                GHOSTTY_SUCCESS
+            );
             assert_eq!(ghostty_key_event_new(null, &mut key_event), GHOSTTY_SUCCESS);
             assert_eq!(
                 ghostty_mouse_encoder_new(null, &mut mouse_encoder),
                 GHOSTTY_SUCCESS
             );
-            assert_eq!(ghostty_mouse_event_new(null, &mut mouse_event), GHOSTTY_SUCCESS);
+            assert_eq!(
+                ghostty_mouse_event_new(null, &mut mouse_event),
+                GHOSTTY_SUCCESS
+            );
         }
 
         let cb = Box::new(UnsafeCell::new(Callbacks {
@@ -467,6 +476,7 @@ impl Terminal {
             current_mouse_buttons: vec![],
             sniffer: sniff::OscSniffer::default(),
             images: images::Images::new(),
+            server_owned: false,
         };
         term.install_callbacks();
         term.apply_config();
@@ -558,14 +568,28 @@ impl Terminal {
         let unlimited_bytes: usize = usize::MAX;
         unsafe {
             let t = self.raw;
-            ghostty_terminal_set(
-                t,
-                GHOSTTY_TERMINAL_OPT_COLOR_PALETTE,
-                &colors as *const _ as *const std::ffi::c_void,
-            );
-            ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, &fg as *const _ as _);
-            ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, &bg as *const _ as _);
-            ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, &cursor as *const _ as _);
+            if !self.server_owned {
+                ghostty_terminal_set(
+                    t,
+                    GHOSTTY_TERMINAL_OPT_COLOR_PALETTE,
+                    &colors as *const _ as *const std::ffi::c_void,
+                );
+                ghostty_terminal_set(
+                    t,
+                    GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND,
+                    &fg as *const _ as _,
+                );
+                ghostty_terminal_set(
+                    t,
+                    GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND,
+                    &bg as *const _ as _,
+                );
+                ghostty_terminal_set(
+                    t,
+                    GHOSTTY_TERMINAL_OPT_COLOR_CURSOR,
+                    &cursor as *const _ as _,
+                );
+            }
             ghostty_terminal_set(
                 t,
                 GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
@@ -583,7 +607,11 @@ impl Terminal {
                 &title_report as *const _ as _,
             );
         }
-        images::Images::configure(self.raw, self.config.enable_kitty_graphics());
+        images::Images::configure(
+            self.raw,
+            self.config.enable_kitty_graphics(),
+            !self.server_owned,
+        );
         self.cb().enq_answerback = self.config.enq_answerback();
         // Re-evaluate any palette overrides relative to the new defaults
         self.colors_snapshot.clear();
@@ -613,8 +641,10 @@ impl Terminal {
     }
 
     fn active_screen(&self) -> usize {
-        let s: GhosttyTerminalScreen =
-            self.get(GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, GHOSTTY_TERMINAL_SCREEN_PRIMARY);
+        let s: GhosttyTerminalScreen = self.get(
+            GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN,
+            GHOSTTY_TERMINAL_SCREEN_PRIMARY,
+        );
         if s == GHOSTTY_TERMINAL_SCREEN_ALTERNATE {
             ALTERNATE
         } else {
@@ -750,7 +780,10 @@ impl Terminal {
         }
         let top = screen.stable_offset;
         screen.prune_below(top);
-        for row in self.images.update(self.raw, self.render, top, new_active_top) {
+        for row in self
+            .images
+            .update(self.raw, self.render, top, new_active_top)
+        {
             if row >= top {
                 screen.mark_row(row, seqno);
             }
@@ -797,8 +830,16 @@ impl Terminal {
             let base = snap.as_mut_ptr();
             let t = self.raw;
             ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE, base as _);
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND, base.add(768) as _);
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND, base.add(771) as _);
+            ghostty_terminal_get(
+                t,
+                GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND,
+                base.add(768) as _,
+            );
+            ghostty_terminal_get(
+                t,
+                GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND,
+                base.add(771) as _,
+            );
             ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_CURSOR, base.add(774) as _);
             let d = base.add(777);
             ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT, d as _);
@@ -812,7 +853,11 @@ impl Terminal {
                 GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND_DEFAULT,
                 d.add(771) as _,
             );
-            ghostty_terminal_get(t, GHOSTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT, d.add(774) as _);
+            ghostty_terminal_get(
+                t,
+                GHOSTTY_TERMINAL_DATA_COLOR_CURSOR_DEFAULT,
+                d.add(774) as _,
+            );
         }
         if snap == self.colors_snapshot {
             return;
@@ -826,7 +871,25 @@ impl Terminal {
         };
         let same = |i: usize| current[i * 3..i * 3 + 3] == defaults[i * 3..i * 3 + 3];
 
-        if current == defaults {
+        if self.server_owned {
+            // Report the terminal's own colours as they are; wezterm's
+            // config only fills in what the terminal leaves unset.
+            let mut palette = self.config.color_palette();
+            for i in 0..256 {
+                palette.colors.0[i] = srgba(at(current, i));
+            }
+            if let Some(c) = self.color(GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND) {
+                palette.foreground = c;
+            }
+            if let Some(c) = self.color(GHOSTTY_TERMINAL_DATA_COLOR_BACKGROUND) {
+                palette.background = c;
+            }
+            if let Some(c) = self.color(GHOSTTY_TERMINAL_DATA_COLOR_CURSOR) {
+                palette.cursor_bg = c;
+                palette.cursor_border = c;
+            }
+            self.palette = Some(palette);
+        } else if current == defaults {
             self.palette = None;
         } else {
             let mut palette = self.config.color_palette();
@@ -855,6 +918,14 @@ impl Terminal {
                 handler.alert(Alert::PaletteChanged);
             }
         }
+    }
+
+    fn color(&self, what: GhosttyTerminalData) -> Option<termwiz::color::SrgbaTuple> {
+        let mut c = GhosttyColorRgb { r: 0, g: 0, b: 0 };
+        let rc = unsafe {
+            ghostty_terminal_get(self.raw, what, &mut c as *mut _ as *mut std::ffi::c_void)
+        };
+        (rc == GHOSTTY_SUCCESS).then(|| srgba(c))
     }
 
     fn dispatch_callback_events(&mut self) {
@@ -1036,9 +1107,9 @@ impl Terminal {
     pub fn get_keyboard_encoding(&self) -> KeyboardEncoding {
         let flags: GhosttyKittyKeyFlags = self.get(GHOSTTY_TERMINAL_DATA_KITTY_KEYBOARD_FLAGS, 0);
         if flags != 0 {
-            KeyboardEncoding::Kitty(termwiz::escape::csi::KittyKeyboardFlags::from_bits_truncate(
-                flags as u16,
-            ))
+            KeyboardEncoding::Kitty(
+                termwiz::escape::csi::KittyKeyboardFlags::from_bits_truncate(flags as u16),
+            )
         } else {
             KeyboardEncoding::Xterm
         }
@@ -1367,6 +1438,167 @@ impl Terminal {
     // -----------------------------------------------------------------
     // Scrollback management
 
+    // -----------------------------------------------------------------
+    // Mirroring a terminal that lives elsewhere (Rex)
+
+    /// Treat colours as owned by whoever produces the output, as with a Rex
+    /// server: wezterm's configured palette is not applied to the terminal,
+    /// `palette()` reports the terminal's own colours, and Kitty graphics
+    /// can't use transmission media that read files on this machine.
+    pub fn set_server_owned(&mut self, owned: bool) {
+        self.server_owned = owned;
+        self.config_generation = None;
+        self.apply_config();
+        self.colors_snapshot.clear();
+        self.sync();
+    }
+
+    /// Set the default colours, as a Rex server's theme metadata does.
+    /// `None` clears a default. `palette` replaces the whole default
+    /// palette: unlisted entries go back to libghostty's built-in colours.
+    pub fn set_default_colors(
+        &mut self,
+        foreground: Option<(u8, u8, u8)>,
+        background: Option<(u8, u8, u8)>,
+        cursor: Option<(u8, u8, u8)>,
+        palette: &[(u8, (u8, u8, u8))],
+    ) {
+        let t = self.raw;
+        let set = |opt: GhosttyTerminalOption, c: Option<(u8, u8, u8)>| {
+            let rgb = c.map(|(r, g, b)| GhosttyColorRgb { r, g, b });
+            unsafe {
+                ghostty_terminal_set(
+                    t,
+                    opt,
+                    match &rgb {
+                        Some(rgb) => rgb as *const GhosttyColorRgb as *const std::ffi::c_void,
+                        None => std::ptr::null(),
+                    },
+                );
+            }
+        };
+        set(GHOSTTY_TERMINAL_OPT_COLOR_FOREGROUND, foreground);
+        set(GHOSTTY_TERMINAL_OPT_COLOR_BACKGROUND, background);
+        set(GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, cursor);
+        unsafe {
+            // Back to the built-in palette, then apply the theme's entries.
+            ghostty_terminal_set(t, GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, std::ptr::null());
+            if !palette.is_empty() {
+                let mut colors = [GhosttyColorRgb { r: 0, g: 0, b: 0 }; 256];
+                ghostty_terminal_get(
+                    t,
+                    GHOSTTY_TERMINAL_DATA_COLOR_PALETTE_DEFAULT,
+                    colors.as_mut_ptr() as *mut std::ffi::c_void,
+                );
+                for (index, (r, g, b)) in palette {
+                    colors[*index as usize] = GhosttyColorRgb {
+                        r: *r,
+                        g: *g,
+                        b: *b,
+                    };
+                }
+                ghostty_terminal_set(
+                    t,
+                    GHOSTTY_TERMINAL_OPT_COLOR_PALETTE,
+                    colors.as_ptr() as *const std::ffi::c_void,
+                );
+            }
+        }
+        self.sync();
+    }
+
+    /// Replace the whole terminal state with a libghostty snapshot (the
+    /// `GHOSTSNP` format), as a Rex server sends when a terminal stream
+    /// starts. `snapshot` must end exactly at the snapshot's FINISH record.
+    ///
+    /// Callbacks, handlers and configuration carry over. The size becomes the
+    /// snapshot's, and every row is reported as changed.
+    pub fn restore_snapshot(&mut self, snapshot: &[u8]) -> anyhow::Result<()> {
+        let mut decoder: GhosttySnapshotDecoder = std::ptr::null_mut();
+        let rc = unsafe {
+            ghostty_snapshot_decoder_new_buf(
+                std::ptr::null(),
+                &mut decoder,
+                snapshot.as_ptr(),
+                snapshot.len(),
+            )
+        };
+        anyhow::ensure!(
+            rc == GHOSTTY_SUCCESS,
+            "ghostty_snapshot_decoder_new_buf failed ({rc})"
+        );
+
+        let limit: u64 = if self.config.enable_kitty_graphics() {
+            images::STORAGE_LIMIT
+        } else {
+            0
+        };
+        // Keep restored scrollback compressed until it is looked at.
+        let compress = true;
+        let mut restored: GhosttyTerminal = std::ptr::null_mut();
+        let rc = unsafe {
+            ghostty_snapshot_decoder_set(
+                decoder,
+                GHOSTTY_SNAPSHOT_DECODER_OPT_KITTY_IMAGE_STORAGE_LIMIT,
+                &limit as *const u64 as *const std::ffi::c_void,
+            );
+            ghostty_snapshot_decoder_set(
+                decoder,
+                GHOSTTY_SNAPSHOT_DECODER_OPT_COMPRESS_HISTORY,
+                &compress as *const bool as *const std::ffi::c_void,
+            );
+            let rc = ghostty_snapshot_decoder_decode(decoder, &mut restored);
+            // Freeing the decoder doesn't free the terminal it returned.
+            ghostty_snapshot_decoder_free(decoder);
+            rc
+        };
+        anyhow::ensure!(
+            rc == GHOSTTY_SUCCESS && !restored.is_null(),
+            "snapshot decoding failed ({rc})"
+        );
+
+        // Tracked pins belong to the old terminal: release them first.
+        for screen in self.screens.iter_mut() {
+            screen.free_anchor();
+        }
+        let old = std::mem::replace(&mut self.raw, restored);
+        unsafe { ghostty_terminal_free(old) };
+
+        self.install_callbacks();
+        self.config_generation = None;
+        self.apply_config();
+
+        let cols = (self.cols() as usize).max(1);
+        let rows = self.rows().max(1);
+        if self.size.cols > 0 && self.size.rows > 0 {
+            let cell_w = self.size.pixel_width / self.size.cols;
+            let cell_h = self.size.pixel_height / self.size.rows;
+            self.size.pixel_width = cell_w * cols;
+            self.size.pixel_height = cell_h * rows;
+        }
+        self.size.cols = cols;
+        self.size.rows = rows;
+        self.cb().size = self.size;
+
+        self.screens = [ScreenState::new(), ScreenState::new()];
+        self.active = self.active_screen();
+        self.images = images::Images::new();
+        self.links = HyperlinkCache::default();
+        self.colors_snapshot.clear();
+        self.current_mouse_buttons.clear();
+        self.seqno += 1;
+        let seqno = self.seqno;
+        for screen in self.screens.iter_mut() {
+            screen.mark_all(seqno);
+        }
+        // Pick up the restored title and working directory.
+        let cb = self.cb();
+        cb.title_changed = true;
+        cb.pwd_changed = true;
+        self.sync();
+        Ok(())
+    }
+
     pub fn erase_scrollback(&mut self) {
         self.advance_bytes(b"\x1b[3J");
     }
@@ -1591,9 +1823,10 @@ impl Terminal {
             (MouseEventKind::Press, MouseButton::Left) => {
                 (GHOSTTY_MOUSE_ACTION_PRESS, Some(GHOSTTY_MOUSE_BUTTON_LEFT))
             }
-            (MouseEventKind::Press, MouseButton::Middle) => {
-                (GHOSTTY_MOUSE_ACTION_PRESS, Some(GHOSTTY_MOUSE_BUTTON_MIDDLE))
-            }
+            (MouseEventKind::Press, MouseButton::Middle) => (
+                GHOSTTY_MOUSE_ACTION_PRESS,
+                Some(GHOSTTY_MOUSE_BUTTON_MIDDLE),
+            ),
             (MouseEventKind::Press, MouseButton::Right) => {
                 (GHOSTTY_MOUSE_ACTION_PRESS, Some(GHOSTTY_MOUSE_BUTTON_RIGHT))
             }
@@ -1609,25 +1842,30 @@ impl Terminal {
             (MouseEventKind::Press, MouseButton::WheelRight(_)) => {
                 (GHOSTTY_MOUSE_ACTION_PRESS, Some(GHOSTTY_MOUSE_BUTTON_SEVEN))
             }
-            (MouseEventKind::Release, MouseButton::Left) => {
-                (GHOSTTY_MOUSE_ACTION_RELEASE, Some(GHOSTTY_MOUSE_BUTTON_LEFT))
-            }
-            (MouseEventKind::Release, MouseButton::Middle) => {
-                (GHOSTTY_MOUSE_ACTION_RELEASE, Some(GHOSTTY_MOUSE_BUTTON_MIDDLE))
-            }
-            (MouseEventKind::Release, MouseButton::Right) => {
-                (GHOSTTY_MOUSE_ACTION_RELEASE, Some(GHOSTTY_MOUSE_BUTTON_RIGHT))
-            }
+            (MouseEventKind::Release, MouseButton::Left) => (
+                GHOSTTY_MOUSE_ACTION_RELEASE,
+                Some(GHOSTTY_MOUSE_BUTTON_LEFT),
+            ),
+            (MouseEventKind::Release, MouseButton::Middle) => (
+                GHOSTTY_MOUSE_ACTION_RELEASE,
+                Some(GHOSTTY_MOUSE_BUTTON_MIDDLE),
+            ),
+            (MouseEventKind::Release, MouseButton::Right) => (
+                GHOSTTY_MOUSE_ACTION_RELEASE,
+                Some(GHOSTTY_MOUSE_BUTTON_RIGHT),
+            ),
             (MouseEventKind::Release, _) => return Ok(()),
             (MouseEventKind::Move, MouseButton::Left) => {
                 (GHOSTTY_MOUSE_ACTION_MOTION, Some(GHOSTTY_MOUSE_BUTTON_LEFT))
             }
-            (MouseEventKind::Move, MouseButton::Middle) => {
-                (GHOSTTY_MOUSE_ACTION_MOTION, Some(GHOSTTY_MOUSE_BUTTON_MIDDLE))
-            }
-            (MouseEventKind::Move, MouseButton::Right) => {
-                (GHOSTTY_MOUSE_ACTION_MOTION, Some(GHOSTTY_MOUSE_BUTTON_RIGHT))
-            }
+            (MouseEventKind::Move, MouseButton::Middle) => (
+                GHOSTTY_MOUSE_ACTION_MOTION,
+                Some(GHOSTTY_MOUSE_BUTTON_MIDDLE),
+            ),
+            (MouseEventKind::Move, MouseButton::Right) => (
+                GHOSTTY_MOUSE_ACTION_MOTION,
+                Some(GHOSTTY_MOUSE_BUTTON_RIGHT),
+            ),
             (MouseEventKind::Move, _) => (GHOSTTY_MOUSE_ACTION_MOTION, None),
             (MouseEventKind::Press, MouseButton::None) => return Ok(()),
         };

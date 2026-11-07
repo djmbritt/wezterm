@@ -13,6 +13,25 @@ User facing docs and guide at: https://wezterm.org/
 This branch uses [libghostty-vt](https://lib.ghostty.org/vt/) for terminal
 emulation. See [BUILDING-GHOSTTY.md](BUILDING-GHOSTTY.md) for build steps.
 
+## Rex client
+
+wezterm can attach to a [Rex](https://www.superlogical.com/rex) terminal
+server: Rex windows become tabs, the server's split layouts become panes, and
+the programs keep running on the server when wezterm closes. See
+[`rex_domains`](docs/config/lua/config/rex_domains.md) to set it up:
+
+```lua
+config.rex_domains = { { name = 'rex', session = 'work' } }
+```
+
+```console
+$ wezterm connect rex
+```
+
+The protocol client is in [`wezterm-rex`](wezterm-rex), with the `rexrs` SDK
+vendored from [rex-rune](https://github.com/shuv1337/rex-rune) in
+[`deps/rexrs`](deps/rexrs).
+
 ## Installation
 
 https://wezterm.org/installation

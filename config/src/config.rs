@@ -5,6 +5,7 @@ use crate::color::{
 };
 use crate::daemon::DaemonOptions;
 use crate::exec_domain::ExecDomain;
+use crate::rex::RexDomain;
 use crate::font::{
     AllowSquareGlyphOverflow, DisplayPixelGeometry, FontLocatorSelection, FontRasterizerSelection,
     FontShaperSelection, FreeTypeLoadFlags, FreeTypeLoadTarget, StyleRule, TextStyle,
@@ -369,6 +370,10 @@ pub struct Config {
 
     #[dynamic(default)]
     pub serial_ports: Vec<SerialDomain>,
+
+    /// Rex terminal servers to attach to.
+    #[dynamic(default)]
+    pub rex_domains: Vec<RexDomain>,
 
     /// The set of unix domains
     #[dynamic(default = "UnixDomain::default_unix_domains")]
@@ -1271,6 +1276,9 @@ impl Config {
         }
         for d in &self.tls_clients {
             check_domain(&d.name, "tls domain")?;
+        }
+        for d in &self.rex_domains {
+            check_domain(&d.name, "rex domain")?;
         }
         Ok(())
     }

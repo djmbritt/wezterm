@@ -1,0 +1,24 @@
+[package]
+name = "wezterm-rex"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "Client side of the Rex terminal server protocol, for wezterm's Rex domain"
+
+[dependencies]
+anyhow.workspace = true
+base64 = { workspace = true, features = ["std"] }
+flume.workspace = true
+futures-util = { workspace = true, features = ["sink"] }
+log.workspace = true
+# Rex's control API. Vendored with rex-linux's revision-11 patches; see
+# deps/rexrs/REX-LINUX.md.
+rexrs = { path = "../deps/rexrs", default-features = false, features = ["tokio"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde.workspace = true
+serde_json.workspace = true
+termwiz.workspace = true
+tokio = { workspace = true, features = ["rt", "net", "time", "macros", "sync", "io-util"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+url.workspace = true

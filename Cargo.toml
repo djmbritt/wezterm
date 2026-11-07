@@ -7,6 +7,8 @@ members = [
   "deps/cairo",
   "ghostty-vt-sys",
   "wezterm-ghostty",
+  "wezterm-rex",
+  "deps/rexrs",
   "wezterm",
   "wezterm-blob-leases",
   "wezterm-cell",
@@ -262,6 +264,7 @@ wezterm-surface = { path = "wezterm-surface" }
 wezterm-term = { path = "term" }
 ghostty-vt-sys = { path = "ghostty-vt-sys" }
 wezterm-ghostty = { path = "wezterm-ghostty" }
+wezterm-rex = { path = "wezterm-rex" }
 wezterm-toast-notification = { path = "wezterm-toast-notification" }
 wezterm-uds = { path = "wezterm-uds" }
 wezterm-version = { path = "wezterm-version" }
